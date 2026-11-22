@@ -1,326 +1,329 @@
 using UnityEngine;
 
-public abstract class BuoyantForceCalculator
+namespace FloatingMesh2
 {
-    protected SubmergedMesh mesh;
-    protected SimulationScene scene;
-    protected Vector3 a, b, c;
-
-    protected const float EPSILON = 1e-5f;
-
-    public BuoyantForceCalculator(Mesh mesh, Transform transform, SimulationScene scene)
+    public abstract class BuoyantForceCalculator
     {
-        this.scene = scene;
-        if(!mesh.isReadable)
+        protected SubmergedMesh mesh;
+        protected SimulationScene scene;
+        protected Vector3 a, b, c;
+
+        protected const float EPSILON = 1e-5f;
+
+        public BuoyantForceCalculator(Mesh mesh, Transform transform, SimulationScene scene)
         {
-            Debug.LogError("Input mesh is not readable. Please enable the reading/writing ability on the import page.");
-        }
-    }
-    public virtual void Calculate(out Vector3 buoyantTorque, out Vector3 buoyantForce)
-    {
-        mesh.Update();
-        buoyantTorque = Vector3.zero;
-        buoyantForce = Vector3.zero;
-    }
-    public Vector3 CalculateTorqueAtPoint(Vector3 force, Vector3 point, Vector3 com)
-    {
-        return Vector3.Cross(point - com, force);
-    }
-
-    public Vector3 Centroid
-    {
-        get => mesh.Centroid;
-    }
-    public Vector3 LocalCentroid
-    {
-        get => mesh.LocalCentroid;
-    }
-
-    public SubmergedMesh MeshData
-    {
-        get => mesh;
-    }
-}
-
-public abstract class VolumeBasedBFC : BuoyantForceCalculator
-{
-    protected SubmergedVolumeMesh Mesh
-    {
-        get => (SubmergedVolumeMesh) mesh;
-    }
-    public float Volume { get { return Mesh.Volume; } }
-    public VolumeBasedBFC(Mesh mesh, Transform transform, SimulationScene scene) : base(mesh, transform, scene)
-    {
-        this.mesh = new SubmergedVolumeMesh(mesh, transform, scene);
-    }
-
-    // Calculate buoyant force
-    // F_B = rho * V_B * g * (0,1,0)
-    protected Vector3 CalculateForce(float submergedVolume)
-    {
-        return Vector3.up * scene.fluid.fluidDensity * submergedVolume * scene.world.gravity;
-    }
-}
-
-public class SurfaceBasedBFC : BuoyantForceCalculator
-{
-    protected SubmergedAreaMesh Mesh
-    {
-        get => (SubmergedAreaMesh)mesh;
-    }
-    public SurfaceBasedBFC(Mesh mesh, Transform transform, SimulationScene scene) : base(mesh, transform, scene)
-    {
-        this.mesh = new SubmergedAreaMesh(mesh, transform, scene);
-    }
-
-    // Calculate buoyant force contribution of a discrete wet surface
-    // F_i = p(c) * A_i * \hat{n}
-    // This is the discretization of the integral:
-    // F = -\int\int_(S)p\hat{n}dS
-    protected Vector3 CalculateForce(Vector3 normal, Vector3 centroid)
-    {
-        return -scene.fluid.GetHydrostaticPressure(centroid) * normal;
-    }
-
-    protected Vector3 CalculateTorqueForTriangle(Vector3 normal, Vector3 a, Vector3 b, Vector3 c, Vector3 com)
-    {
-        float ap = scene.fluid.GetHydrostaticPressure(a);
-        float bp = scene.fluid.GetHydrostaticPressure(b);
-        float cp = scene.fluid.GetHydrostaticPressure(c);
-        a -= com;
-        b -= com;
-        c -= com;
-        return Vector3.Cross(normal, (2 * ap + bp + cp) * a + (ap + 2 * bp + cp) * b + (ap + bp + 2 * cp) * c) / 12;
-    }
-}
-
-public class FastVolumeBFC : VolumeBasedBFC
-{
-    public FastVolumeBFC(Mesh mesh, Transform transform, SimulationScene scene) : base(mesh, transform, scene)
-    { }
-
-    public override void Calculate(out Vector3 buoyantTorque, out Vector3 buoyantForce)
-    {
-        base.Calculate(out buoyantTorque, out buoyantForce);
-
-        float submergedVolume = 0;
-        Vector3 submergedCentroid = Vector3.zero;
-
-        // Calculate the contributions of the totally submerged triangles
-        // in the local coordinate system. Volume and centroid elements 
-        // are precalculated, therefore this algorithm is faster than other 2.
-        for (int i = 0; i < Mesh.TriangleCount; i++)
-        {
-            if (Mesh.IsBelow(i))
+            this.scene = scene;
+            if (!mesh.isReadable)
             {
-                submergedVolume += Mesh.GetVolumeContributionOfTriangle(i);
-                submergedCentroid += Mesh.GetVolumeContributionOfTriangle(i) * Mesh.GetTetrahedronCentroidOfTriangle(i);
+                Debug.LogError("Input mesh is not readable. Please enable the reading/writing ability on the import page.");
             }
         }
-        if (submergedVolume >= EPSILON)
+        public virtual void Calculate(out Vector3 buoyantTorque, out Vector3 buoyantForce)
         {
-            submergedCentroid /= submergedVolume;
+            mesh.Update();
+            buoyantTorque = Vector3.zero;
+            buoyantForce = Vector3.zero;
         }
-        else
+        public Vector3 CalculateTorqueAtPoint(Vector3 force, Vector3 point, Vector3 com)
         {
-            submergedVolume = 0;
+            return Vector3.Cross(point - com, force);
         }
 
-        buoyantForce = CalculateForce(submergedVolume);
-        buoyantTorque = CalculateTorqueAtPoint(buoyantForce, submergedCentroid, Mesh.Centroid);
+        public Vector3 Centroid
+        {
+            get => mesh.Centroid;
+        }
+        public Vector3 LocalCentroid
+        {
+            get => mesh.LocalCentroid;
+        }
+
+        public SubmergedMesh MeshData
+        {
+            get => mesh;
+        }
     }
-}
 
-public class ImprovedVolumeBFC : VolumeBasedBFC
-{
-    Vector3 submergedCentroid;
-    private float V;
-    private Vector3 C;
-    public ImprovedVolumeBFC(Mesh mesh, Transform transform, SimulationScene scene) : base(mesh, transform, scene)
-    { }
-
-    public override void Calculate(out Vector3 buoyantTorque, out Vector3 buoyantForce)
+    public abstract class VolumeBasedBFC : BuoyantForceCalculator
     {
-        base.Calculate(out buoyantTorque, out buoyantForce);
-
-        submergedCentroid = Vector3.zero;
-        float submergedVolume = 0;
-
-        // Transform (local) centroid to world-space
-        Vector3 o = Mesh.Centroid;
-        // Project to the y = fluidLevel plane
-        o.y = scene.fluid.GetFluidLevelAt(o.x, o.z);
-        // Now o is ON the surface of the fluid!
-        // This causes the volume elements to be zero for
-        // each triangles ON the fluid surface.
-        for (int i = 0; i < Mesh.TriangleCount; i++)
+        protected SubmergedVolumeMesh Mesh
         {
-            if (Mesh.IsBelow(i))
-            {
-                Mesh.GetTriangleVertices(i, out a, out b, out c);
-                Mesh.CalculateSubmergedTriangleContribution(a, b, c, o, out V, out C);
-                submergedVolume += V;
-                submergedCentroid += V*C;
-            }
+            get => (SubmergedVolumeMesh)mesh;
         }
-        if (submergedVolume >= EPSILON)
-            submergedCentroid /= submergedVolume;
-        else
-            submergedVolume = 0;
-
-        // Transform back the centroid into the local coordinate system;
-        buoyantForce = CalculateForce(submergedVolume);
-        buoyantTorque = CalculateTorqueAtPoint(buoyantForce, submergedCentroid, Mesh.Centroid);
-    }
-}
-
-public class ExactVolumeBFC : VolumeBasedBFC
-{
-    protected Vector3 submergedCentroid;
-    protected Vector3 o;
-    protected float V, V1, V2;
-    protected Vector3 C, C1, C2;
-    protected Vector3 p, q;
-    protected SubmergedMesh.TriangleOrientation orientation;
-    public ExactVolumeBFC(Mesh mesh, Transform transform, SimulationScene scene) : base(mesh, transform, scene)
-    { }
-
-    public override void Calculate(out Vector3 buoyantTorque, out Vector3 buoyantForce)
-    {
-        base.Calculate(out buoyantTorque, out buoyantForce);
-
-        submergedCentroid = Vector3.zero;
-        float submergedVolume = 0;
-
-        // The same trick as in improved algorithm.
-        o = Mesh.Centroid;
-        o.y = scene.fluid.GetFluidLevelAt(o.x, o.z);
-
-        for (int i = 0; i < Mesh.TriangleCount; i++)
+        public float Volume { get { return Mesh.Volume; } }
+        public VolumeBasedBFC(Mesh mesh, Transform transform, SimulationScene scene) : base(mesh, transform, scene)
         {
-            if (Mesh.IsBelow(i))
-            {
-                Mesh.GetTriangleVertices(i, out a, out b, out c);
-                Mesh.CalculateSubmergedTriangleContribution(a, b, c, o, out V, out C);
-                submergedVolume += V;
-                submergedCentroid += V*C;
-            }
-            // But we also calculate the contribution of the
-            // partially submerged triangles
-            if (Mesh.IsIntersecting(i))
-            {
-                Mesh.GetTriangleVerticesWithIntersectingPoints(i, out a, out b, out c, out p, out q, out orientation);
+            this.mesh = new SubmergedVolumeMesh(mesh, transform, scene);
+        }
 
-                if(orientation == SubmergedMesh.TriangleOrientation.Downwards)
+        // Calculate buoyant force
+        // F_B = rho * V_B * g * (0,1,0)
+        protected Vector3 CalculateForce(float submergedVolume)
+        {
+            return Vector3.up * scene.fluid.fluidDensity * submergedVolume * scene.world.gravity;
+        }
+    }
+
+    public class SurfaceBasedBFC : BuoyantForceCalculator
+    {
+        protected SubmergedAreaMesh Mesh
+        {
+            get => (SubmergedAreaMesh)mesh;
+        }
+        public SurfaceBasedBFC(Mesh mesh, Transform transform, SimulationScene scene) : base(mesh, transform, scene)
+        {
+            this.mesh = new SubmergedAreaMesh(mesh, transform, scene);
+        }
+
+        // Calculate buoyant force contribution of a discrete wet surface
+        // F_i = p(c) * A_i * \hat{n}
+        // This is the discretization of the integral:
+        // F = -\int\int_(S)p\hat{n}dS
+        protected Vector3 CalculateForce(Vector3 normal, Vector3 centroid)
+        {
+            return -scene.fluid.GetHydrostaticPressure(centroid) * normal;
+        }
+
+        protected Vector3 CalculateTorqueForTriangle(Vector3 normal, Vector3 a, Vector3 b, Vector3 c, Vector3 com)
+        {
+            float ap = scene.fluid.GetHydrostaticPressure(a);
+            float bp = scene.fluid.GetHydrostaticPressure(b);
+            float cp = scene.fluid.GetHydrostaticPressure(c);
+            a -= com;
+            b -= com;
+            c -= com;
+            return Vector3.Cross(normal, (2 * ap + bp + cp) * a + (ap + 2 * bp + cp) * b + (ap + bp + 2 * cp) * c) / 12;
+        }
+    }
+
+    public class FastVolumeBFC : VolumeBasedBFC
+    {
+        public FastVolumeBFC(Mesh mesh, Transform transform, SimulationScene scene) : base(mesh, transform, scene)
+        { }
+
+        public override void Calculate(out Vector3 buoyantTorque, out Vector3 buoyantForce)
+        {
+            base.Calculate(out buoyantTorque, out buoyantForce);
+
+            float submergedVolume = 0;
+            Vector3 submergedCentroid = Vector3.zero;
+
+            // Calculate the contributions of the totally submerged triangles
+            // in the local coordinate system. Volume and centroid elements 
+            // are precalculated, therefore this algorithm is faster than other 2.
+            for (int i = 0; i < Mesh.TriangleCount; i++)
+            {
+                if (Mesh.IsBelow(i))
                 {
-                    Mesh.CalculateSubmergedTriangleContribution(p, b, q, o, out V, out C);
-                    C = V * C;
-                } 
-                else
-                {
-                    Mesh.CalculateSubmergedTriangleContribution(p, b, q, o, out V1, out C1);
-                    Mesh.CalculateSubmergedTriangleContribution(q, b, c, o, out V2, out C2);
-                    V = V1 + V2;
-                    C = V1*C1 + V2*C2;
+                    submergedVolume += Mesh.GetVolumeContributionOfTriangle(i);
+                    submergedCentroid += Mesh.GetVolumeContributionOfTriangle(i) * Mesh.GetTetrahedronCentroidOfTriangle(i);
                 }
-                submergedVolume += V;
-                submergedCentroid += C;
             }
-        }
-        if (submergedVolume >= EPSILON)
-            submergedCentroid /= submergedVolume;
-        else
-            submergedVolume = 0;
-
-        // Transform back the centroid into the local coordinate system
-        buoyantForce = CalculateForce(submergedVolume);
-        buoyantTorque = CalculateTorqueAtPoint(buoyantForce, submergedCentroid, Mesh.Centroid);
-    }
-}
-
-
-public class FastSurfaceBFC : SurfaceBasedBFC
-{
-    protected Vector3 triangleCentroid, force, torque;
-    public FastSurfaceBFC(Mesh mesh, Transform transform, SimulationScene scene) : base(mesh, transform, scene)
-    { }
-
-    public override void Calculate(out Vector3 buoyantTorque, out Vector3 buoyantForce)
-    {
-        base.Calculate(out buoyantTorque, out buoyantForce);
-
-        for (int i = 0; i < Mesh.TriangleCount; i++)
-        {
-            if (Mesh.IsBelow(i))
+            if (submergedVolume >= EPSILON)
             {
-                Mesh.GetTriangleVertices(i, out a, out b, out c);
-                triangleCentroid = Mesh.GetCentroid(i);
-                force = CalculateForce(Mesh.GetNormal(i), triangleCentroid);
-                torque = CalculateTorqueForTriangle(Mesh.GetNormal(i), a, b, c, Mesh.Centroid);
-                buoyantForce += force;
-                buoyantTorque += torque;
+                submergedCentroid /= submergedVolume;
             }
+            else
+            {
+                submergedVolume = 0;
+            }
+
+            buoyantForce = CalculateForce(submergedVolume);
+            buoyantTorque = CalculateTorqueAtPoint(buoyantForce, submergedCentroid, Mesh.Centroid);
         }
     }
-}
 
-
-public class ExactSurfaceBFC : SurfaceBasedBFC
-{
-    protected Vector3 triangleCentroid, force, torque;
-    protected Vector3 p, q;
-    protected Vector3 normal;
-    protected SubmergedMesh.TriangleOrientation orientation;
-    public ExactSurfaceBFC(Mesh mesh, Transform transform, SimulationScene scene) : base(mesh, transform, scene)
-    { }
-
-    public override void Calculate(out Vector3 buoyantTorque, out Vector3 buoyantForce)
+    public class ImprovedVolumeBFC : VolumeBasedBFC
     {
-        base.Calculate(out buoyantTorque, out buoyantForce);
+        Vector3 submergedCentroid;
+        private float V;
+        private Vector3 C;
+        public ImprovedVolumeBFC(Mesh mesh, Transform transform, SimulationScene scene) : base(mesh, transform, scene)
+        { }
 
-        for (int i = 0; i < Mesh.TriangleCount; i++)
+        public override void Calculate(out Vector3 buoyantTorque, out Vector3 buoyantForce)
         {
-            if (Mesh.IsBelow(i))
+            base.Calculate(out buoyantTorque, out buoyantForce);
+
+            submergedCentroid = Vector3.zero;
+            float submergedVolume = 0;
+
+            // Transform (local) centroid to world-space
+            Vector3 o = Mesh.Centroid;
+            // Project to the y = fluidLevel plane
+            o.y = scene.fluid.GetFluidLevelAt(o.x, o.z);
+            // Now o is ON the surface of the fluid!
+            // This causes the volume elements to be zero for
+            // each triangles ON the fluid surface.
+            for (int i = 0; i < Mesh.TriangleCount; i++)
             {
-                Mesh.GetTriangleVertices(i, out a, out b, out c);
-                normal = Mesh.GetNormal(i);
-                triangleCentroid = Mesh.GetCentroid(i);
-                force = CalculateForce(normal, triangleCentroid);
-                torque = CalculateTorqueForTriangle(normal, a, b, c, Mesh.Centroid);
-                buoyantForce += force;
-                buoyantTorque += torque;
-            } 
-            else if (Mesh.IsIntersecting(i))
-            {
-                Mesh.GetTriangleVerticesWithIntersectingPoints(i, out a, out b, out c, out p, out q, out orientation); 
-                if (orientation == SubmergedMesh.TriangleOrientation.Downwards)
+                if (Mesh.IsBelow(i))
                 {
-                    // the normals must be calculated so that they point outwards!
-                    normal = Vector3.Cross(b - p, q - p) / 2;
-                    triangleCentroid = (p + b + q) / 3;
-                    force = CalculateForce(normal, triangleCentroid);
-                    torque = CalculateTorqueForTriangle(normal, p, b, q, Mesh.Centroid);
+                    Mesh.GetTriangleVertices(i, out a, out b, out c);
+                    Mesh.CalculateSubmergedTriangleContribution(a, b, c, o, out V, out C);
+                    submergedVolume += V;
+                    submergedCentroid += V * C;
+                }
+            }
+            if (submergedVolume >= EPSILON)
+                submergedCentroid /= submergedVolume;
+            else
+                submergedVolume = 0;
+
+            // Transform back the centroid into the local coordinate system;
+            buoyantForce = CalculateForce(submergedVolume);
+            buoyantTorque = CalculateTorqueAtPoint(buoyantForce, submergedCentroid, Mesh.Centroid);
+        }
+    }
+
+    public class ExactVolumeBFC : VolumeBasedBFC
+    {
+        protected Vector3 submergedCentroid;
+        protected Vector3 o;
+        protected float V, V1, V2;
+        protected Vector3 C, C1, C2;
+        protected Vector3 p, q;
+        protected SubmergedMesh.TriangleOrientation orientation;
+        public ExactVolumeBFC(Mesh mesh, Transform transform, SimulationScene scene) : base(mesh, transform, scene)
+        { }
+
+        public override void Calculate(out Vector3 buoyantTorque, out Vector3 buoyantForce)
+        {
+            base.Calculate(out buoyantTorque, out buoyantForce);
+
+            submergedCentroid = Vector3.zero;
+            float submergedVolume = 0;
+
+            // The same trick as in improved algorithm.
+            o = Mesh.Centroid;
+            o.y = scene.fluid.GetFluidLevelAt(o.x, o.z);
+
+            for (int i = 0; i < Mesh.TriangleCount; i++)
+            {
+                if (Mesh.IsBelow(i))
+                {
+                    Mesh.GetTriangleVertices(i, out a, out b, out c);
+                    Mesh.CalculateSubmergedTriangleContribution(a, b, c, o, out V, out C);
+                    submergedVolume += V;
+                    submergedCentroid += V * C;
+                }
+                // But we also calculate the contribution of the
+                // partially submerged triangles
+                if (Mesh.IsIntersecting(i))
+                {
+                    Mesh.GetTriangleVerticesWithIntersectingPoints(i, out a, out b, out c, out p, out q, out orientation);
+
+                    if (orientation == SubmergedMesh.TriangleOrientation.Downwards)
+                    {
+                        Mesh.CalculateSubmergedTriangleContribution(p, b, q, o, out V, out C);
+                        C = V * C;
+                    }
+                    else
+                    {
+                        Mesh.CalculateSubmergedTriangleContribution(p, b, q, o, out V1, out C1);
+                        Mesh.CalculateSubmergedTriangleContribution(q, b, c, o, out V2, out C2);
+                        V = V1 + V2;
+                        C = V1 * C1 + V2 * C2;
+                    }
+                    submergedVolume += V;
+                    submergedCentroid += C;
+                }
+            }
+            if (submergedVolume >= EPSILON)
+                submergedCentroid /= submergedVolume;
+            else
+                submergedVolume = 0;
+
+            // Transform back the centroid into the local coordinate system
+            buoyantForce = CalculateForce(submergedVolume);
+            buoyantTorque = CalculateTorqueAtPoint(buoyantForce, submergedCentroid, Mesh.Centroid);
+        }
+    }
+
+
+    public class FastSurfaceBFC : SurfaceBasedBFC
+    {
+        protected Vector3 triangleCentroid, force, torque;
+        public FastSurfaceBFC(Mesh mesh, Transform transform, SimulationScene scene) : base(mesh, transform, scene)
+        { }
+
+        public override void Calculate(out Vector3 buoyantTorque, out Vector3 buoyantForce)
+        {
+            base.Calculate(out buoyantTorque, out buoyantForce);
+
+            for (int i = 0; i < Mesh.TriangleCount; i++)
+            {
+                if (Mesh.IsBelow(i))
+                {
+                    Mesh.GetTriangleVertices(i, out a, out b, out c);
+                    triangleCentroid = Mesh.GetCentroid(i);
+                    force = CalculateForce(Mesh.GetNormal(i), triangleCentroid);
+                    torque = CalculateTorqueForTriangle(Mesh.GetNormal(i), a, b, c, Mesh.Centroid);
                     buoyantForce += force;
                     buoyantTorque += torque;
                 }
-                else
-                {
-                    // the normals must be calculated so that they point outwards!
-                    normal = Vector3.Cross(b - p, q - p) / 2;
-                    triangleCentroid = (p + b + q) / 3;
-                    force = CalculateForce(normal, triangleCentroid);
-                    torque = CalculateTorqueForTriangle(normal, p, b, q, Mesh.Centroid);
-                    buoyantForce += force;
-                    buoyantTorque += torque;
+            }
+        }
+    }
 
-                    normal = Vector3.Cross(b - q, c - q) / 2;
-                    triangleCentroid = (q + b + c) / 3;
+
+    public class ExactSurfaceBFC : SurfaceBasedBFC
+    {
+        protected Vector3 triangleCentroid, force, torque;
+        protected Vector3 p, q;
+        protected Vector3 normal;
+        protected SubmergedMesh.TriangleOrientation orientation;
+        public ExactSurfaceBFC(Mesh mesh, Transform transform, SimulationScene scene) : base(mesh, transform, scene)
+        { }
+
+        public override void Calculate(out Vector3 buoyantTorque, out Vector3 buoyantForce)
+        {
+            base.Calculate(out buoyantTorque, out buoyantForce);
+
+            for (int i = 0; i < Mesh.TriangleCount; i++)
+            {
+                if (Mesh.IsBelow(i))
+                {
+                    Mesh.GetTriangleVertices(i, out a, out b, out c);
+                    normal = Mesh.GetNormal(i);
+                    triangleCentroid = Mesh.GetCentroid(i);
                     force = CalculateForce(normal, triangleCentroid);
-                    torque = CalculateTorqueForTriangle(normal, q, b, c, Mesh.Centroid);
+                    torque = CalculateTorqueForTriangle(normal, a, b, c, Mesh.Centroid);
                     buoyantForce += force;
                     buoyantTorque += torque;
                 }
+                else if (Mesh.IsIntersecting(i))
+                {
+                    Mesh.GetTriangleVerticesWithIntersectingPoints(i, out a, out b, out c, out p, out q, out orientation);
+                    if (orientation == SubmergedMesh.TriangleOrientation.Downwards)
+                    {
+                        // the normals must be calculated so that they point outwards!
+                        normal = Vector3.Cross(b - p, q - p) / 2;
+                        triangleCentroid = (p + b + q) / 3;
+                        force = CalculateForce(normal, triangleCentroid);
+                        torque = CalculateTorqueForTriangle(normal, p, b, q, Mesh.Centroid);
+                        buoyantForce += force;
+                        buoyantTorque += torque;
+                    }
+                    else
+                    {
+                        // the normals must be calculated so that they point outwards!
+                        normal = Vector3.Cross(b - p, q - p) / 2;
+                        triangleCentroid = (p + b + q) / 3;
+                        force = CalculateForce(normal, triangleCentroid);
+                        torque = CalculateTorqueForTriangle(normal, p, b, q, Mesh.Centroid);
+                        buoyantForce += force;
+                        buoyantTorque += torque;
 
+                        normal = Vector3.Cross(b - q, c - q) / 2;
+                        triangleCentroid = (q + b + c) / 3;
+                        force = CalculateForce(normal, triangleCentroid);
+                        torque = CalculateTorqueForTriangle(normal, q, b, c, Mesh.Centroid);
+                        buoyantForce += force;
+                        buoyantTorque += torque;
+                    }
+
+                }
             }
         }
     }
